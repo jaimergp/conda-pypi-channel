@@ -1,0 +1,158 @@
+[build-system]
+requires = ["hatchling"] # "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "conda-pypi-channel"
+description = "Expose a PyPI index as a conda channel, on the fly."
+readme = "README.md"
+authors = [
+  { name = "Jaime Rodríguez-Guerra", email = "jrodriguez@quansight.com" },
+]
+license = "MIT"
+license-files = [
+  "LICENSE",
+]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Python :: Implementation :: PyPy",
+]
+requires-python = ">=3.9"
+dependencies = [
+  # "conda >=23.9.0",
+  "pip",
+  "grayskull",
+  "packaging",
+]
+# dynamic = ["version"]
+version = "0.0.1"
+
+[project.urls]
+homepage = "https://github.com/conda-incubator/conda-pypi-channel"
+
+[project.entry-points.conda]
+conda-pypi-channel = "conda_pypi_channel.plugin"
+
+[tool.pixi.project]
+channels = ["conda-forge"]
+platforms = ["linux-64", "osx-64", "osx-arm64", "win-64", "linux-aarch64"]
+
+[tool.pixi.dependencies]
+# must match project.dependencies (sans python and conda)
+python = ">=3.8"
+conda = ">=23.9"
+fastapi = "*"
+starlette = "*"
+uvicorn = "*"
+pip = "*"
+httpx = "*"
+packaging = "*"
+tqdm = "*"
+whl2conda = "*"
+
+[tool.pixi.pypi-dependencies]
+"conda-pypi-channel" = { path  = ".", editable = true }
+async-lru = "*"
+
+[tool.pixi.tasks]
+conda = "pip install -q -e ../conda -e ../conda-libmamba-solver --no-deps; python -m conda"
+
+[tool.pixi.feature.build]
+dependencies = { conda-build = "*" }
+tasks = { build = "conda build recipe" }
+
+[tool.pixi.feature.docs.tasks]
+docs = { cmd = "sphinx-build -M dirhtml . _build", cwd = "docs" }
+serve = { cmd = "python -m http.server", cwd = "docs/_build/dirhtml" }
+clean = { cmd = "rm -rf _build", cwd = "docs" }
+
+[tool.pixi.feature.docs.dependencies]
+python = "3.10.*"
+conda-sphinx-theme = "*"
+linkify-it-py = "*"
+myst-parser = "*"
+sphinx = "*"
+sphinx-copybutton = "*"
+sphinx-design = "*"
+sphinx-reredirects = "*"
+sphinx-sitemap = "*"
+# Dependencies for autodoc
+grayskull = "*"
+packaging = ">=24"
+typer = "*"
+conda-package-streaming = ">=0.11"
+python-build = "*"
+pydantic = "*"
+python-installer = ">=0.7"
+conda-index = "*"
+
+[tool.pixi.feature.docs.pypi-dependencies]
+unearth = ">=0.17.2"
+pypi-simple = "*"
+
+[tool.pixi.feature.test.tasks]
+test = 'python -m pytest'
+pre-commit = 'pre-commit'
+
+[tool.pixi.feature.test.dependencies]
+pytest = "7.4.3.*"
+fmt = "!=10.2.0"
+pytest-mock = "3.12.0.*"
+conda-build = "*"
+pre-commit = "*"
+# Build system dependencies
+typer = "*"
+conda-package-streaming = ">=0.11"
+unearth = ">=0.17.2"
+python-build = "*"
+pydantic = "*"
+python-installer = ">=0.7"
+conda-index = "*"
+conda-libmamba-solver = ">=24.9"
+packaging = ">=24"
+# Dependencies for corpus tests
+sqlalchemy = "*"
+python-multipart = "*"
+pyyaml = "*"
+zstandard = "*"  # Will be in stdlib as compression.zstd in Python 3.14+
+# Build backend for flit tests
+flit = "*"
+
+[tool.pixi.feature.test.pypi-dependencies]
+pypi-simple = "*"
+
+[tool.pixi.feature.py39.dependencies]
+python = "3.9.*"
+
+[tool.pixi.feature.py310.dependencies]
+python = "3.10.*"
+
+[tool.pixi.feature.py311.dependencies]
+python = "3.11.*"
+
+[tool.pixi.environments]
+build = ["build"]
+docs = ["docs"]
+test-py39 = ["test", "py39"]
+test-py310 = ["test", "py310"]
+test-py311 = ["test", "py311"]
+
+[tool.hatch.version]
+source = "vcs"
+
+# [tool.hatch.build.hooks.vcs]
+# version-file = "conda_pypi_channel/_version.py"
+
+[tool.ruff]
+line-length = 99
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]
+
+# [tool.coverage.run]
+# source = ["conda_pypi_channel/", "tests/"]
+# omit = ["conda_pypi_channel/__init__.py"]
