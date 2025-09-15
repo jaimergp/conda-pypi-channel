@@ -7934,7 +7934,7 @@ packages:
 - pypi: ./
   name: conda-pypi-channel
   version: 0.0.1
-  sha256: 9194aa218889416abd02f8de65957a10440237975bb4b569967ace089df83065
+  sha256: 0aa7645937ca733914b45c6eda16b3efef7dd85496c0c41a10666e2f206a24f5
   requires_dist:
   - pip
   - grayskull

@@ -1,5 +1,6 @@
 import atexit
 import json
+import logging
 import os
 import sys
 import time
@@ -13,6 +14,7 @@ from conda.core.prefix_data import PrefixData
 from conda.gateways.connection.download import download_inner
 
 process: Popen | None = None
+log = logging.getLogger(f"conda.{__name__}")
 
 
 def start_channel(command=None):
@@ -22,7 +24,7 @@ def start_channel(command=None):
     )
     if not start:
         return
-    print("Detected conda-pypi-channel! Starting server...")
+    log.info("Detected conda-pypi-channel! Starting server...")
     global process
 
     payload = vars(context._argparse_args)
@@ -38,7 +40,11 @@ def start_channel(command=None):
     atexit.register(os.unlink, f.name)
     env = os.environ.copy()
     env["ARGPARSE_PAYLOAD_FOR_CONDA_PYPI_CHANNEL"] = f.name
-    process = Popen(["uvicorn", "conda_pypi_channel.server:app"], env=env)
+    env["CONDA_PYPI_CHANNEL_VERBOSITY"] = f"{context.verbosity}"
+    log_level = ["warning", "warning", "info", "debug", "debug"][context.verbosity]
+    process = Popen(
+        ["uvicorn", "conda_pypi_channel.server:app", "--log-level", log_level], env=env
+    )
     time.sleep(1)  # wait a bit to let server start; TODO: poll for sentinel output
 
 
@@ -69,7 +75,7 @@ def patch_download():
 def shutdown_channel(command=None):
     global process
     if process:
-        print("Shutting down server...")
+        log.info("Stopping conda-pypi-channel server...")
         process.terminate()
         process.wait(timeout=5)
 

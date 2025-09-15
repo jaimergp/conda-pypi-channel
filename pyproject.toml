@@ -51,7 +51,6 @@ uvicorn = "*"
 pip = "*"
 httpx = "*"
 packaging = "*"
-tqdm = "*"
 whl2conda = "*"
 
 [tool.pixi.pypi-dependencies]

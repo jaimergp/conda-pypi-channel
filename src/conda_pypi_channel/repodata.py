@@ -15,7 +15,6 @@ from packaging.metadata import Metadata
 from packaging.requirements import Requirement
 from packaging.tags import parse_tag
 from packaging.version import Version
-from tqdm.asyncio import tqdm
 
 PYPI_INDEX_URL = "https://pypi.org/pypi/{package_name}/json"
 MAX_RELEASES_PER_PACKAGE = 5
@@ -236,25 +235,16 @@ async def generate_repodata(
     for requirement in requirements:
         await queue.put(Requirement(requirement))
     seen = set(["python"])
-    pbar = tqdm(total=len(requirements), desc="Package")
     while not queue.empty():
         seen_reqs = set()
         requirement = await queue.get()
-        pbar.set_description(requirement.name)
-        pbar.set_postfix({"version": "N/A"})
         if requirement.name in seen:
             continue
-        async for version, distribution in tqdm(
-            wheels_for_requirement(
-                requirement,
-                target_platform=target_platform,
-                python_version=python_version,
-            ),
-            leave=False,
-            unit=" wheels",
-            desc=requirement.name,
+        async for version, distribution in wheels_for_requirement(
+            requirement,
+            target_platform=target_platform,
+            python_version=python_version,
         ):
-            pbar.set_postfix({"version": version})
             record = await create_record(requirement.name, version, distribution)
             repodatas[record["subdir"]]["packages.conda"][record["fn"]] = record
             for req in record["depends"]:
@@ -262,8 +252,6 @@ async def generate_repodata(
                 if req.name not in seen and req.name not in seen_reqs:
                     seen_reqs.add(req.name)
                     await queue.put(req)
-                    pbar.total += 1
         seen.add(requirement.name)
-        pbar.update(1)
 
     return repodatas
