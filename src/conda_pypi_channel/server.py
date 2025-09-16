@@ -1,9 +1,12 @@
+import hashlib
 import json
 import os
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 from uuid import uuid4
 from urllib.request import urlretrieve
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
@@ -33,6 +36,17 @@ else:
 REPODATA_CACHE = {}
 ARTIFACTS_CACHE_DIR = Path(".cache").resolve()
 ARTIFACTS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def compute_sum(path: str | os.PathLike, algo: Literal["md5", "sha256"]) -> str:
+    path = Path(path)
+
+    # FUTURE: Python 3.11+, replace with hashlib.file_digest
+    hasher = hashlib.new(algo)
+    with path.open("rb") as fh:
+        for chunk in iter(partial(fh.read, 8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
 
 
 @app.get("/conda-pypi-channel/{platform}/repodata.json")
@@ -86,6 +100,8 @@ async def get_package(platform: str, package_path: str):
             if record := cache.get(platform, {}).get(packages_key, {}).get(package_path):
                 whl_path = ARTIFACTS_CACHE_DIR / record["url"].split("/")[-1]
                 urlretrieve(record["url"], whl_path)
+                if compute_sum(whl_path, "sha256") != record["legacy_sha256"]:
+                    continue
                 w2c = CustomFilenameWheel2CondaConverter(whl_path, ARTIFACTS_CACHE_DIR)
                 w2c.custom_conda_pkg_file = package_path
                 w2c.convert()
