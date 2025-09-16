@@ -2,6 +2,7 @@
 Generates repodata.json from a set of PyPI requirements.
 """
 
+import asyncio
 from asyncio.queues import Queue
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
@@ -237,21 +238,31 @@ async def generate_repodata(
     seen = set(["python"])
     while not queue.empty():
         seen_reqs = set()
-        requirement = await queue.get()
-        if requirement.name in seen:
-            continue
-        async for version, distribution in wheels_for_requirement(
-            requirement,
-            target_platform=target_platform,
-            python_version=python_version,
+        requirements = [
+            requirement
+            for requirement in await asyncio.gather(
+                *[queue.get() for _ in range(min([queue.qsize(), 10]))]
+            )
+            if requirement.name not in seen
+        ]
+
+        for record in await asyncio.gather(
+            *[
+                create_record(requirement.name, version, distribution)
+                for requirement in requirements
+                async for version, distribution in wheels_for_requirement(
+                    requirement,
+                    target_platform=target_platform,
+                    python_version=python_version,
+                )
+            ]
         ):
-            record = await create_record(requirement.name, version, distribution)
             repodatas[record["subdir"]]["packages.conda"][record["fn"]] = record
-            for req in record["depends"]:
-                req = Requirement(req)
-                if req.name not in seen and req.name not in seen_reqs:
-                    seen_reqs.add(req.name)
-                    await queue.put(req)
-        seen.add(requirement.name)
+            for dep in record["depends"]:
+                dep = Requirement(dep)
+                if dep.name not in seen and dep.name not in seen_reqs:
+                    seen_reqs.add(dep.name)
+                    await queue.put(dep)
+        seen.update([requirement.name for requirement in requirements])
 
     return repodatas
