@@ -6,7 +6,6 @@ import asyncio
 from asyncio.queues import Queue
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from functools import lru_cache
 from datetime import datetime
 from typing import Any, AsyncGenerator
 
@@ -21,7 +20,7 @@ PYPI_INDEX_URL = "https://pypi.org/pypi/{package_name}/json"
 MAX_RELEASES_PER_PACKAGE = 5
 
 
-@lru_cache(maxsize=256)
+@alru_cache(maxsize=256)
 async def _fetch_releases_for_package_name(package: str) -> dict[str, Any]:
     async with httpx.AsyncClient() as client:
         r = await client.get(PYPI_INDEX_URL.format(package_name=package))
