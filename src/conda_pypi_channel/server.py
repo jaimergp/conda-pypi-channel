@@ -10,6 +10,7 @@ from typing import Literal
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
+from whl2conda.api.converter import Wheel2CondaError
 
 from . import __version__
 from .convert import CustomFilenameWheel2CondaConverter
@@ -26,10 +27,12 @@ PAYLOAD_PATH = Path(os.environ.get("ARGPARSE_PAYLOAD_FOR_CONDA_PYPI_CHANNEL", "p
 if PAYLOAD_PATH.is_file():
     PAYLOAD = json.loads(PAYLOAD_PATH.read_text())
 else:
+    from conda.base.context import context
+
     PAYLOAD = {
         # DEBUGGING ONLY
         "packages": [":pypi:niquests"],
-        "target_platform": "osx-arm64",
+        "target_platform": context.subdir,
         "python_version": "3.12",
     }
 
@@ -55,16 +58,6 @@ async def get_repodata(platform: str):
     Builds the repodata.json file for a specific platform (e.g., 'noarch', 'linux-64'),
     given some PyPI package names
     """
-    repodata = {
-        "info": {"subdir": platform},
-        "packages": {},
-        "packages.conda": {},
-        "removed": [],
-        "repodata_version": 1,
-    }
-    if platform != "noarch":
-        return repodata
-
     pypi_specs = [pkg[6:] for pkg in PAYLOAD.get("packages") if pkg.startswith(":pypi:")]
     key = (*pypi_specs, PAYLOAD["target_platform"], PAYLOAD["python_version"])
     global REPODATA_CACHE
@@ -104,8 +97,13 @@ async def get_package(platform: str, package_path: str):
                     continue
                 w2c = CustomFilenameWheel2CondaConverter(whl_path, ARTIFACTS_CACHE_DIR)
                 w2c.custom_conda_pkg_file = package_path
-                w2c.convert()
-                break
+                try:
+                    w2c.convert()
+                except Wheel2CondaError as exc:
+                    # 501 means "Non Implemented"
+                    raise HTTPException(501, detail=str(exc))
+                else:
+                    break
         else:
             raise HTTPException(404, detail="Package not found")
     return FileResponse(

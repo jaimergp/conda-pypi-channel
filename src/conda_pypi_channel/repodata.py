@@ -3,29 +3,39 @@ Generates repodata.json from a set of PyPI requirements.
 """
 
 import asyncio
+import platform
 from asyncio.queues import Queue
-from collections.abc import Iterable, Iterator
+from collections.abc import AsyncGenerator, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, AsyncGenerator
+from typing import Any
 
 import httpx
 from async_lru import alru_cache
 from packaging.metadata import Metadata
 from packaging.requirements import Requirement
 from packaging.tags import parse_tag
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 PYPI_INDEX_URL = "https://pypi.org/pypi/{package_name}/json"
 MAX_RELEASES_PER_PACKAGE = 5
 
 
 @alru_cache(maxsize=256)
-async def _fetch_releases_for_package_name(package: str) -> dict[str, Any]:
+async def _fetch_releases_for_package_name(package: str) -> list[tuple[str, Any]]:
     async with httpx.AsyncClient() as client:
         r = await client.get(PYPI_INDEX_URL.format(package_name=package))
-    r.raise_for_status()
-    return r.json()["releases"].items()
+    if r.is_error:
+        return []
+
+    retval = []
+    for version, release in r.json()["releases"].items():
+        try:
+            Version(version)
+        except InvalidVersion:
+            continue
+        retval.append((version, release))
+    return retval
 
 
 @alru_cache(maxsize=1024)
@@ -40,7 +50,7 @@ async def _fetch_metadata_for_wheel(url: str) -> Metadata:
 
 @dataclass
 class SystemLowerBounds:
-    osx: str = "10.9"
+    osx: str = getattr(platform, "mac_ver", lambda: ("10.9",))()[0]
     glibc: str = "2.17"
     win: str = ""
 
@@ -56,7 +66,7 @@ async def wheels_for_requirement(
     release_count = 0
     for version, releases in sorted(
         await _fetch_releases_for_package_name(requirement.name),
-        key=lambda kv: Version(kv[0]),
+        key=lambda kv: (Version(kv[0]), kv[1]),
         reverse=True,
     ):
         if release_count > MAX_RELEASES_PER_PACKAGE:
@@ -110,16 +120,35 @@ def metadata_to_record(metadata: Metadata) -> dict[str, Any]:
     }
 
 
-def _platform_tag_to_subdir(platform: str) -> str:
-    if platform == "any":
+def _platform_tag_to_subdir(platform_tag: str) -> str:
+    if platform_tag == "any":
         return "noarch"
-    if "win" in platform:
-        return "win-64"
-    if "macosx" in platform:
-        return "osx-64"  # TODO: osx-arm64
-    if "linux" in platform:
-        return "linux-64"  # TODO: other linux archs
-    raise ValueError(f"Unknown platform {platform}")
+    if "win" in platform_tag:
+        if "amd64" in platform_tag or platform_tag == "win32":
+            return "win-64"
+        if "arm64" in platform_tag:
+            return "win-arm64"
+    if "macosx" in platform_tag:
+        if "x86_64" in platform_tag:
+            return "osx-64"
+        if "arm64" in platform_tag:
+            return "osx-arm64"
+        if "universal" in platform_tag:
+            if platform.machine() == "arm64":
+                return "osx-arm64"
+            return "osx-64"
+    if "linux" in platform_tag:
+        if "x86_64" in platform_tag:
+            return "linux-64"
+        if "aarch64" in platform_tag:
+            return "linux-aarch64"
+        if "ppc64le" in platform_tag:
+            return "linux-ppc64le"
+        if "s390x" in platform_tag:
+            return "linux-s390x"
+        if "i686" in platform_tag:
+            return "linux-32"
+    raise ValueError(f"Unknown platform {platform_tag}")
 
 
 def _tag_platform_match(
@@ -129,36 +158,28 @@ def _tag_platform_match(
 ) -> bool:
     if tag_platform == "any":
         return True
-    target_os, target_arch = target_platform.split("-")
-    if target_arch == "64":
-        target_arch = "x86_64"
+    target_os, _ = target_platform.split("-")
     if target_os == "linux":
         system_lower_bound = system_lower_bounds.glibc
         if "manylinux" not in tag_platform:
             return False
         if tag_platform.startswith("manylinux1_"):
             tag_lower_bound = "2.5"
-            arch = tag_platform.split("_", 1)[1]
         elif tag_platform.startswith("manylinux2010_"):
             tag_lower_bound = "2.12"
-            arch = tag_platform.split("_", 1)[1]
         elif tag_platform.startswith("manylinux2014_"):
             tag_lower_bound = "2.17"
-            arch = tag_platform.split("_", 1)[1]
         else:
             _, major, minor, arch = tag_platform.split("_", 3)
             tag_lower_bound = f"{major}.{minor}"
     elif target_os == "osx":
         system_lower_bound = system_lower_bounds.osx
-        _, major, minor, arch = tag_platform.split("_", 3)
+        _, major, minor, _ = tag_platform.split("_", 3)
         tag_lower_bound = f"{major}.{minor}"
     elif target_os == "win":
-        arch = "x86_64"  # TODO: Handle arm64
+        return True
     else:
         raise ValueError(f"Unknown target_platform {target_platform}.")
-
-    if target_arch != arch and not target_arch.startswith("universal"):
-        return False
     if Version(system_lower_bound) < Version(tag_lower_bound):
         return False
     return True
@@ -170,6 +191,7 @@ def _tags_match(
     system_lower_bounds: SystemLowerBounds | None = None,
     python_version: str = "3.9",
 ) -> bool:
+    python_version = ".".join(python_version.split(".")[:2])
     for tag in parse_tag(tags):
         if not tag.interpreter.startswith(("py", "cp")):
             # Ignore if not CPython, for now (TODO)
