@@ -8,6 +8,7 @@ from asyncio.queues import Queue
 from collections.abc import AsyncGenerator, Iterable, Iterator
 from dataclasses import dataclass
 from datetime import datetime
+from logging import getLogger
 from typing import Any
 
 import httpx
@@ -18,7 +19,8 @@ from packaging.tags import parse_tag
 from packaging.version import InvalidVersion, Version
 
 PYPI_INDEX_URL = "https://pypi.org/pypi/{package_name}/json"
-MAX_RELEASES_PER_PACKAGE = 5
+MAX_RELEASES_PER_PACKAGE = 10
+log = getLogger(f"conda.{__name__}")
 
 
 @alru_cache(maxsize=256)
@@ -129,14 +131,14 @@ def _platform_tag_to_subdir(platform_tag: str) -> str:
         if "arm64" in platform_tag:
             return "win-arm64"
     if "macosx" in platform_tag:
-        if "x86_64" in platform_tag:
-            return "osx-64"
-        if "arm64" in platform_tag:
-            return "osx-arm64"
         if "universal" in platform_tag:
             if platform.machine() == "arm64":
                 return "osx-arm64"
             return "osx-64"
+        if "x86_64" in platform_tag:
+            return "osx-64"
+        if "arm64" in platform_tag:
+            return "osx-arm64"
     if "linux" in platform_tag:
         if "x86_64" in platform_tag:
             return "linux-64"
@@ -148,7 +150,8 @@ def _platform_tag_to_subdir(platform_tag: str) -> str:
             return "linux-s390x"
         if "i686" in platform_tag:
             return "linux-32"
-    raise ValueError(f"Unknown platform {platform_tag}")
+    log.debug("Skipping unknown platform: %s", platform_tag)
+    return "<UNKNOWN>"
 
 
 def _tag_platform_match(
@@ -158,6 +161,8 @@ def _tag_platform_match(
 ) -> bool:
     if tag_platform == "any":
         return True
+    if system_lower_bounds is None:
+        system_lower_bounds = SystemLowerBounds()
     target_os, _ = target_platform.split("-")
     if target_os == "linux":
         system_lower_bound = system_lower_bounds.glibc
@@ -209,19 +214,30 @@ def _tags_match(
     return False
 
 
-def tag_to_record(tag_str: str, record: dict[str, Any]) -> dict[str, Any]:
+def tag_to_record(tag_str: str, record: dict[str, Any], target_platform: str) -> dict[str, Any]:
     parsed = parse_tag(tag_str)
     for tag in parsed:
         platform = tag.platform
         if platform == "any":
             record["subdir"] = "noarch"
             record["noarch"] = "python"
+            break
+    else:
+        subdirs = list(dict.fromkeys(_platform_tag_to_subdir(tag.platform) for tag in parsed))
+        if len(subdirs) == 1:
+            record["subdir"] = subdirs[0]
+        elif target_platform in subdirs:
+            record["subdir"] = target_platform
         else:
-            record["subdir"] = _platform_tag_to_subdir(platform)
+            log.warning(
+                "Multiple subdirs detected for %s and none match current platform: %s",
+                record.get("url", tag_str),
+                target_platform,
+            )
 
 
 async def create_record(
-    name: str, version: str, distribution_metadata: dict[str, Any]
+    name: str, version: str, distribution_metadata: dict[str, Any], target_platform: str
 ) -> dict[str, Any]:
     filename = distribution_metadata["filename"]
     tag_str = "-".join(filename[: -len(".whl")].rsplit("-", 3)[-3:])
@@ -237,7 +253,7 @@ async def create_record(
         **distribution_to_record(distribution_metadata),
         **metadata_to_record(metadata),
     }
-    tag_to_record(tag_str, record)
+    tag_to_record(tag_str, record, target_platform)
     record["depends"].extend(requires_dist_to_depends(metadata.requires_dist))
     return record
 
@@ -269,7 +285,7 @@ async def generate_repodata(
 
         for record in await asyncio.gather(
             *[
-                create_record(requirement.name, version, distribution)
+                create_record(requirement.name, version, distribution, target_platform)
                 for requirement in requirements
                 async for version, distribution in wheels_for_requirement(
                     requirement,
